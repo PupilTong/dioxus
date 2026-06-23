@@ -280,6 +280,12 @@ mod ffi {
         pub fn replace_style_sheets_tokens(bytes_ptr: i32, bytes_len: i32);
         #[link_name = "__SetBackgroundColorRgb"]
         pub fn set_background_color_rgb(element: i32, rgb: u32);
+        #[link_name = "__CreateViewWithClassAndBackgroundColorRgb"]
+        pub fn create_view_with_class_and_background_color_rgb(
+            class_ptr: i32,
+            class_len: i32,
+            rgb: u32,
+        ) -> i32;
         #[link_name = "__AddClass"]
         pub fn add_class(element: i32, class_ptr: i32, class_len: i32);
         #[link_name = "__SetClasses"]
@@ -527,6 +533,12 @@ pub fn replace_style_sheets_tokens(tokens: crate::css::CSSTokenStream) {
 #[inline]
 pub fn set_background_color_rgb(element: i32, rgb: u32) {
     unsafe { ffi::set_background_color_rgb(element, rgb) }
+}
+
+#[inline]
+pub fn create_view_with_class_and_background_color_rgb(class_name: &str, rgb: u32) -> i32 {
+    let (ptr, len) = string_parts(class_name);
+    unsafe { ffi::create_view_with_class_and_background_color_rgb(ptr, len, rgb) }
 }
 
 #[inline]

@@ -60,10 +60,10 @@ fn create_view(class_name: &str) -> i32 {
 
 #[inline(always)]
 fn create_color_view(class_name: &str, red: u32, green: u32, blue: u32) -> i32 {
-    let node = raw::create_view();
-    raw::set_classes(node, class_name);
-    raw::set_background_color_rgb(node, (red << 16) | (green << 8) | blue);
-    node
+    raw::create_view_with_class_and_background_color_rgb(
+        class_name,
+        (red << 16) | (green << 8) | blue,
+    )
 }
 
 fn append_children(parent: i32, children: &[i32]) {
