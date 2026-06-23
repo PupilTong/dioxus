@@ -94,5 +94,5 @@ fn App() -> Element {
 }
 
 fn main() {
-    launch_with_stylesheet(App, APP_STYLES);
+    launch_static_with_stylesheet(App, APP_STYLES);
 }

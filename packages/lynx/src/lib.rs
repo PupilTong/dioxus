@@ -6,7 +6,7 @@ pub use dioxus_lynx_macro::{CSS, inline_image};
 pub use dioxus_lynx_sys as lynx_sys;
 pub use dioxus_lynx_sys::css;
 pub use events::{LynxEvent, LynxEventData};
-pub use renderer::{LynxApp, LynxMutations, mount, with_app};
+pub use renderer::{LynxApp, LynxMutations, mount, mount_static, with_app};
 
 pub fn launch(root: fn() -> dioxus_core::Element) {
     renderer::install_app(renderer::mount(root));
@@ -15,6 +15,18 @@ pub fn launch(root: fn() -> dioxus_core::Element) {
 pub fn launch_with_stylesheet(root: fn() -> dioxus_core::Element, stylesheet: css::CSSTokenStream) {
     lynx_sys::raw::replace_style_sheets_tokens(stylesheet);
     launch(root);
+}
+
+pub fn launch_static(root: fn() -> dioxus_core::Element) {
+    renderer::mount_static(root);
+}
+
+pub fn launch_static_with_stylesheet(
+    root: fn() -> dioxus_core::Element,
+    stylesheet: css::CSSTokenStream,
+) {
+    lynx_sys::raw::replace_style_sheets_tokens(stylesheet);
+    launch_static(root);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -32,7 +44,10 @@ pub mod prelude {
     pub use crate::elements as dioxus_elements;
     pub use crate::events::{self, LynxEvent, LynxEventData};
     pub use crate::lynx_sys;
-    pub use crate::{CSS, LynxApp, LynxMutations, inline_image, launch, launch_with_stylesheet};
+    pub use crate::{
+        CSS, LynxApp, LynxMutations, inline_image, launch, launch_static,
+        launch_static_with_stylesheet, launch_with_stylesheet,
+    };
     pub use dioxus_core;
     pub use dioxus_core::{
         Attribute, Callback, Component, Element, ErrorBoundary, ErrorContext, Event, EventHandler,
@@ -42,6 +57,8 @@ pub mod prelude {
     };
     #[allow(deprecated)]
     pub use dioxus_core_macro::{Props, component, rsx};
+    #[cfg(feature = "hooks")]
     pub use dioxus_hooks::*;
+    #[cfg(feature = "hooks")]
     pub use dioxus_signals::{self, *};
 }

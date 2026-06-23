@@ -1,6 +1,6 @@
 use dioxus_core::{
-    AttributeValue, ElementId, Template, TemplateAttribute, TemplateNode, VirtualDom,
-    WriteMutations,
+    AttributeValue, DynamicNode, ElementId, Template, TemplateAttribute, TemplateNode, VNode,
+    VirtualDom, WriteMutations,
 };
 use dioxus_lynx_sys::raw;
 use rustc_hash::FxHashMap;
@@ -139,9 +139,7 @@ enum TemplateOp {
         slot: usize,
         text: &'static str,
     },
-    CreatePlaceholder {
-        slot: usize,
-    },
+    CreatePlaceholder,
     SetStaticAttr {
         slot: usize,
         name: &'static str,
@@ -160,9 +158,17 @@ struct PathSlot {
 }
 
 #[derive(Clone, Debug)]
+struct PlaceholderSlot {
+    slot: usize,
+    parent: usize,
+    next_sibling: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
 struct TemplateProgram {
     ops: Box<[TemplateOp]>,
     path_slots: Box<[PathSlot]>,
+    placeholder_slots: Box<[PlaceholderSlot]>,
     slot_count: usize,
     root_slot: usize,
 }
@@ -171,6 +177,7 @@ impl TemplateProgram {
     fn compile(root: &'static TemplateNode) -> Self {
         let mut ops = Vec::new();
         let mut path_slots = Vec::new();
+        let mut placeholder_slots = Vec::new();
         let mut next_slot = 0;
         let root_slot = Self::compile_node(
             root,
@@ -178,10 +185,12 @@ impl TemplateProgram {
             &mut next_slot,
             &mut ops,
             &mut path_slots,
+            &mut placeholder_slots,
         );
         Self {
             ops: ops.into_boxed_slice(),
             path_slots: path_slots.into_boxed_slice(),
+            placeholder_slots: placeholder_slots.into_boxed_slice(),
             slot_count: next_slot,
             root_slot,
         }
@@ -193,6 +202,7 @@ impl TemplateProgram {
         next_slot: &mut usize,
         ops: &mut Vec<TemplateOp>,
         path_slots: &mut Vec<PathSlot>,
+        placeholder_slots: &mut Vec<PlaceholderSlot>,
     ) -> usize {
         let slot = *next_slot;
         *next_slot += 1;
@@ -219,10 +229,30 @@ impl TemplateProgram {
                         ops.push(TemplateOp::SetStaticAttr { slot, name, value });
                     }
                 }
+
+                let mut child_slots = Vec::with_capacity(children.len());
                 for (index, child) in children.iter().enumerate() {
                     path.push(index as u8);
-                    let child_slot = Self::compile_node(child, path, next_slot, ops, path_slots);
+                    let child_slot = Self::compile_node(
+                        child,
+                        path,
+                        next_slot,
+                        ops,
+                        path_slots,
+                        placeholder_slots,
+                    );
                     path.pop();
+                    child_slots.push(child_slot);
+                }
+
+                for (index, child_slot) in child_slots.iter().copied().enumerate() {
+                    if matches!(children[index], TemplateNode::Dynamic { .. }) {
+                        placeholder_slots.push(PlaceholderSlot {
+                            slot: child_slot,
+                            parent: slot,
+                            next_sibling: child_slots.get(index + 1).copied(),
+                        });
+                    }
                     ops.push(TemplateOp::AppendChild {
                         parent: slot,
                         child: child_slot,
@@ -230,7 +260,7 @@ impl TemplateProgram {
                 }
             }
             TemplateNode::Text { text } => ops.push(TemplateOp::CreateText { slot, text }),
-            TemplateNode::Dynamic { .. } => ops.push(TemplateOp::CreatePlaceholder { slot }),
+            TemplateNode::Dynamic { .. } => ops.push(TemplateOp::CreatePlaceholder),
         }
 
         slot
@@ -242,29 +272,88 @@ impl TemplateProgram {
             .find(|entry| entry.path.as_ref() == path)
             .map(|entry| entry.slot)
     }
+
+    fn placeholder_for_slot(&self, slot: usize) -> Option<&PlaceholderSlot> {
+        self.placeholder_slots
+            .iter()
+            .find(|entry| entry.slot == slot)
+    }
+}
+
+#[derive(Debug)]
+enum SlotStorage {
+    Inline { slots: [i32; 2], len: usize },
+    Heap(Vec<i32>),
+}
+
+impl SlotStorage {
+    fn new(len: usize) -> Self {
+        if len <= 2 {
+            Self::Inline {
+                slots: [raw::NULL_NODE; 2],
+                len,
+            }
+        } else {
+            Self::Heap(vec![raw::NULL_NODE; len])
+        }
+    }
+
+    fn get(&self, index: usize) -> Option<i32> {
+        match self {
+            Self::Inline { slots, len } => (index < *len).then_some(slots[index]),
+            Self::Heap(slots) => slots.get(index).copied(),
+        }
+    }
+
+    fn set(&mut self, index: usize, value: i32) -> bool {
+        match self {
+            Self::Inline { slots, len } if index < *len => {
+                slots[index] = value;
+                true
+            }
+            Self::Heap(slots) => {
+                if let Some(slot) = slots.get_mut(index) {
+                    *slot = value;
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]
 struct TemplateInstance {
     program: Rc<TemplateProgram>,
-    slots: Vec<i32>,
+    slots: SlotStorage,
 }
 
 impl TemplateInstance {
     fn raw_for_path(&self, path: &[u8]) -> Option<i32> {
         let slot = self.program.slot_for_path(path)?;
-        self.slots
-            .get(slot)
-            .copied()
-            .filter(|raw| *raw != raw::NULL_NODE)
+        self.slots.get(slot).filter(|raw| *raw != raw::NULL_NODE)
     }
 
     fn set_raw_for_path(&mut self, path: &[u8], raw_node: i32) {
-        if let Some(slot) = self.program.slot_for_path(path)
-            && let Some(raw) = self.slots.get_mut(slot)
-        {
-            *raw = raw_node;
+        if let Some(slot) = self.program.slot_for_path(path) {
+            self.slots.set(slot, raw_node);
         }
+    }
+
+    fn insertion_point_for_path(&self, path: &[u8]) -> Option<(i32, Option<i32>)> {
+        let slot = self.program.slot_for_path(path)?;
+        let placeholder = self.program.placeholder_for_slot(slot)?;
+        let parent = self
+            .slots
+            .get(placeholder.parent)
+            .filter(|raw| *raw != raw::NULL_NODE)?;
+        let next_sibling = placeholder
+            .next_sibling
+            .and_then(|slot| self.slots.get(slot))
+            .filter(|raw| *raw != raw::NULL_NODE);
+        Some((parent, next_sibling))
     }
 }
 
@@ -450,31 +539,28 @@ impl<H: Host> LynxMutations<H> {
     }
 
     fn replay_template(&mut self, program: Rc<TemplateProgram>) -> Option<StackNode> {
-        let mut slots = vec![raw::NULL_NODE; program.slot_count];
+        let mut slots = SlotStorage::new(program.slot_count);
         for op in program.ops.iter() {
             match *op {
                 TemplateOp::CreateElement { slot, tag } => {
-                    slots[slot] = self.host.create_element(tag);
+                    slots.set(slot, self.host.create_element(tag));
                     self.mark_mutated();
                 }
                 TemplateOp::CreateText { slot, text } => {
-                    slots[slot] = self.host.create_text(text);
+                    slots.set(slot, self.host.create_text(text));
                     self.mark_mutated();
                 }
-                TemplateOp::CreatePlaceholder { slot } => {
-                    slots[slot] = self.host.create_placeholder();
-                    self.mark_mutated();
-                }
+                TemplateOp::CreatePlaceholder => {}
                 TemplateOp::SetStaticAttr { slot, name, value } => {
-                    let raw_node = slots[slot];
+                    let raw_node = slots.get(slot).unwrap_or(raw::NULL_NODE);
                     if raw_node != raw::NULL_NODE {
                         self.host.set_attribute(raw_node, name, value);
                         self.mark_mutated();
                     }
                 }
                 TemplateOp::AppendChild { parent, child } => {
-                    let parent = slots[parent];
-                    let child = slots[child];
+                    let parent = slots.get(parent).unwrap_or(raw::NULL_NODE);
+                    let child = slots.get(child).unwrap_or(raw::NULL_NODE);
                     if parent != raw::NULL_NODE && child != raw::NULL_NODE {
                         self.host.append_child(parent, child);
                         self.mark_mutated();
@@ -483,7 +569,7 @@ impl<H: Host> LynxMutations<H> {
             }
         }
 
-        let raw_node = slots.get(program.root_slot).copied()?;
+        let raw_node = slots.get(program.root_slot)?;
         (raw_node != raw::NULL_NODE).then(|| {
             StackNode::template(
                 raw_node,
@@ -493,6 +579,18 @@ impl<H: Host> LynxMutations<H> {
                 },
             )
         })
+    }
+
+    fn insert_replacements_before(
+        &mut self,
+        parent: i32,
+        replacements: &[StackNode],
+        before: Option<i32>,
+    ) {
+        for node in replacements {
+            self.host.insert_before(parent, node.raw, before);
+            self.mark_mutated();
+        }
     }
 
     fn replace_raw_with(&mut self, old_raw: i32, replacements: &[StackNode]) {
@@ -582,12 +680,28 @@ impl<H: Host> WriteMutations for LynxMutations<H> {
 
     fn replace_placeholder_with_nodes(&mut self, path: &'static [u8], m: usize) {
         let replacements = self.pop_nodes(m);
-        let old_raw = self
+        let (old_raw, insertion_point) = self
             .stack
             .last()
-            .and_then(|template_root| template_root.raw_for_path(path));
-        let Some(old_raw) = old_raw else { return };
-        self.replace_raw_with(old_raw, &replacements);
+            .map(|template_root| {
+                (
+                    template_root.raw_for_path(path),
+                    template_root
+                        .template
+                        .as_ref()
+                        .and_then(|template| template.insertion_point_for_path(path)),
+                )
+            })
+            .unwrap_or((None, None));
+
+        if let Some(old_raw) = old_raw {
+            self.replace_raw_with(old_raw, &replacements);
+        } else if let Some((parent, before)) = insertion_point {
+            self.insert_replacements_before(parent, &replacements, before);
+        } else {
+            return;
+        }
+
         let replacement_raw = replacements
             .first()
             .map(|first| first.raw)
@@ -739,6 +853,110 @@ pub fn mount(root: fn() -> dioxus_core::Element) -> LynxApp {
     let mut app = LynxApp::new(root);
     app.rebuild();
     app
+}
+
+pub fn mount_static(root: fn() -> dioxus_core::Element) {
+    let mut host = RealHost;
+    let root_raw = host.page_root();
+    let mut mutated = false;
+    if let Ok(vnode) = root() {
+        mutated = render_static_vnode(&mut host, root_raw, &vnode) || mutated;
+    }
+    if mutated {
+        host.commit();
+    }
+}
+
+fn render_static_vnode<H: Host>(host: &mut H, parent: i32, vnode: &VNode) -> bool {
+    let mut mutated = false;
+    for root in vnode.template.roots() {
+        mutated = render_static_template_node(host, parent, vnode, root) || mutated;
+    }
+    mutated
+}
+
+fn render_static_template_node<H: Host>(
+    host: &mut H,
+    parent: i32,
+    vnode: &VNode,
+    node: &TemplateNode,
+) -> bool {
+    match node {
+        TemplateNode::Element {
+            tag,
+            namespace: _,
+            attrs,
+            children,
+        } => {
+            let raw = host.create_element(tag);
+            for attr in *attrs {
+                match attr {
+                    TemplateAttribute::Static {
+                        name,
+                        value,
+                        namespace: _,
+                    } => host.set_attribute(raw, name, value),
+                    TemplateAttribute::Dynamic { id } => {
+                        for attr in &*vnode.dynamic_attrs[*id] {
+                            set_static_attribute(host, raw, attr.name, &attr.value);
+                        }
+                    }
+                }
+            }
+            for child in *children {
+                render_static_template_node(host, raw, vnode, child);
+            }
+            host.append_child(parent, raw);
+            true
+        }
+        TemplateNode::Text { text } => {
+            let raw = host.create_text(text);
+            host.append_child(parent, raw);
+            true
+        }
+        TemplateNode::Dynamic { id } => {
+            render_static_dynamic_node(host, parent, &vnode.dynamic_nodes[*id])
+        }
+    }
+}
+
+fn render_static_dynamic_node<H: Host>(host: &mut H, parent: i32, node: &DynamicNode) -> bool {
+    match node {
+        DynamicNode::Fragment(nodes) => {
+            let mut mutated = false;
+            for vnode in nodes {
+                mutated = render_static_vnode(host, parent, vnode) || mutated;
+            }
+            mutated
+        }
+        DynamicNode::Text(text) => {
+            let raw = host.create_text(&text.value);
+            host.append_child(parent, raw);
+            true
+        }
+        DynamicNode::Placeholder(_) => false,
+        DynamicNode::Component(_) => {
+            #[cfg(debug_assertions)]
+            eprintln!("dioxus_lynx: static mount does not render child components");
+            false
+        }
+    }
+}
+
+fn set_static_attribute<H: Host>(host: &mut H, raw_node: i32, name: &str, value: &AttributeValue) {
+    match value {
+        AttributeValue::Text(value) => host.set_attribute(raw_node, name, value),
+        AttributeValue::Float(value) => host.set_attribute(raw_node, name, &value.to_string()),
+        AttributeValue::Int(value) => host.set_attribute(raw_node, name, &value.to_string()),
+        AttributeValue::Bool(value) => {
+            host.set_attribute(raw_node, name, if *value { "true" } else { "false" })
+        }
+        AttributeValue::None => host.remove_attribute(raw_node, name),
+        AttributeValue::Any(_) | AttributeValue::Listener(_) => {
+            #[cfg(debug_assertions)]
+            eprintln!("dioxus_lynx: unsupported static attribute value for `{name}`");
+        }
+    }
 }
 
 pub struct LynxApp {
@@ -1043,6 +1261,29 @@ mod tests {
     }
 
     #[test]
+    fn static_mount_renders_template_tree_without_vdom_runtime() {
+        let mut host = RecordingHost::default();
+        let root = host.page_root();
+        let vnode = TemplateApp().unwrap();
+
+        assert!(render_static_vnode(&mut host, root, &vnode));
+
+        let root_node = host.node(root);
+        assert_eq!(root_node.children.len(), 1);
+        let view = root_node.children[0];
+        assert_eq!(host.node(view).tag, "view");
+        assert_eq!(
+            host.node(view).attrs.get("class").map(String::as_str),
+            Some("root")
+        );
+        let text_element = host.node(view).children[0];
+        assert_eq!(host.node(text_element).tag, "text");
+        let text = host.node(text_element).children[0];
+        assert_eq!(host.node(text).text.as_deref(), Some("hello"));
+        assert_eq!(host.unique_id_calls.get(), 0);
+    }
+
+    #[test]
     fn set_node_text_replaces_text_node() {
         let mut host = RecordingHost::default();
         let root = host.page_root();
@@ -1102,6 +1343,42 @@ mod tests {
         assert_eq!(
             mutations.host().node(dynamic).text.as_deref(),
             Some("dynamic")
+        );
+    }
+
+    #[test]
+    fn template_placeholder_replacement_preserves_static_sibling_order() {
+        static CHILDREN: &[TemplateNode] = &[
+            TemplateNode::Dynamic { id: 0 },
+            TemplateNode::Text { text: "after" },
+        ];
+        static ROOTS: &[TemplateNode] = &[TemplateNode::Element {
+            tag: "view",
+            namespace: None,
+            attrs: &[],
+            children: CHILDREN,
+        }];
+        static NODE_PATHS: &[&[u8]] = &[&[0, 0]];
+        let template = Template::new(ROOTS, NODE_PATHS, &[]);
+
+        let mut host = RecordingHost::default();
+        let root = host.page_root();
+        let mut mutations = LynxMutations::new_with_host(host, root);
+
+        mutations.load_template(template, 0, ElementId(1));
+        mutations.create_text_node("dynamic", ElementId(2));
+        mutations.replace_placeholder_with_nodes(&[0], 1);
+
+        let view = mutations.raw_node(ElementId(1)).unwrap();
+        let children = &mutations.host().node(view).children;
+        assert_eq!(children.len(), 2);
+        assert_eq!(
+            mutations.host().node(children[0]).text.as_deref(),
+            Some("dynamic")
+        );
+        assert_eq!(
+            mutations.host().node(children[1]).text.as_deref(),
+            Some("after")
         );
     }
 
