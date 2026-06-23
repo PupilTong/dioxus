@@ -1,0 +1,13 @@
+[package]
+name = "dioxus-lynx-sys"
+version = { workspace = true }
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Rust wrappers for Lynx WAMR host bindings"
+rust-version = "1.85.0"
+
+[lib]
+name = "dioxus_lynx_sys"
+
+[features]
+default = []

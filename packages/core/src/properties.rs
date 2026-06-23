@@ -145,17 +145,75 @@ pub trait ComponentFunction<Props, Marker = ()>: Clone + 'static {
     fn rebuild(&self, props: Props) -> Element;
 }
 
+#[cfg(not(feature = "hot-reload"))]
+fn call_component_with_props<F, P>(component: &F, props: P) -> Element
+where
+    F: Fn(P) -> Element + Clone + 'static,
+{
+    component(props)
+}
+
+#[cfg(not(feature = "hot-reload"))]
+fn call_component_without_props<F>(component: &F) -> Element
+where
+    F: Fn() -> Element + Clone + 'static,
+{
+    component()
+}
+
+#[cfg(not(feature = "hot-reload"))]
+fn component_fn_ptr_with_props<F, P>(component: &F) -> usize
+where
+    F: Fn(P) -> Element + Clone + 'static,
+{
+    if std::mem::size_of::<F>() == std::mem::size_of::<fn() -> ()>() {
+        let ptr: usize = unsafe { std::mem::transmute_copy(component) };
+        ptr
+    } else {
+        call_component_with_props::<F, P> as *const () as usize
+    }
+}
+
+#[cfg(not(feature = "hot-reload"))]
+fn component_fn_ptr_without_props<F>(component: &F) -> usize
+where
+    F: Fn() -> Element + Clone + 'static,
+{
+    if std::mem::size_of::<F>() == std::mem::size_of::<fn() -> ()>() {
+        let ptr: usize = unsafe { std::mem::transmute_copy(component) };
+        ptr
+    } else {
+        call_component_without_props::<F> as *const () as usize
+    }
+}
+
 /// Accept any callbacks that take props
 impl<F, P> ComponentFunction<P> for F
 where
     F: Fn(P) -> Element + Clone + 'static,
 {
     fn rebuild(&self, props: P) -> Element {
-        subsecond::HotFn::current(self.clone()).call((props,))
+        #[cfg(feature = "hot-reload")]
+        {
+            subsecond::HotFn::current(self.clone()).call((props,))
+        }
+
+        #[cfg(not(feature = "hot-reload"))]
+        {
+            self(props)
+        }
     }
 
     fn fn_ptr(&self) -> usize {
-        subsecond::HotFn::current(self.clone()).ptr_address().0 as usize
+        #[cfg(feature = "hot-reload")]
+        {
+            subsecond::HotFn::current(self.clone()).ptr_address().0 as usize
+        }
+
+        #[cfg(not(feature = "hot-reload"))]
+        {
+            component_fn_ptr_with_props::<F, P>(self)
+        }
     }
 }
 
@@ -165,12 +223,28 @@ impl<F> ComponentFunction<(), EmptyMarker> for F
 where
     F: Fn() -> Element + Clone + 'static,
 {
-    fn rebuild(&self, props: ()) -> Element {
-        subsecond::HotFn::current(self.clone()).call(props)
+    fn rebuild(&self, _props: ()) -> Element {
+        #[cfg(feature = "hot-reload")]
+        {
+            subsecond::HotFn::current(self.clone()).call(_props)
+        }
+
+        #[cfg(not(feature = "hot-reload"))]
+        {
+            self()
+        }
     }
 
     fn fn_ptr(&self) -> usize {
-        subsecond::HotFn::current(self.clone()).ptr_address().0 as usize
+        #[cfg(feature = "hot-reload")]
+        {
+            subsecond::HotFn::current(self.clone()).ptr_address().0 as usize
+        }
+
+        #[cfg(not(feature = "hot-reload"))]
+        {
+            component_fn_ptr_without_props::<F>(self)
+        }
     }
 }
 

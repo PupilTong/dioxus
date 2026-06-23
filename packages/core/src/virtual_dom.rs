@@ -324,7 +324,7 @@ impl VirtualDom {
         );
         dom.new_scope(Box::new(root), "app");
 
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, feature = "hot-reload"))]
         dom.register_subsecond_handler();
 
         dom
@@ -767,7 +767,7 @@ impl VirtualDom {
         self.runtime().handle_event(name, event, element);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     fn register_subsecond_handler(&self) {
         let sender = self.runtime().sender.clone();
         subsecond::register_handler(std::sync::Arc::new(move || {

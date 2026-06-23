@@ -23,7 +23,7 @@ slotmap = { workspace = true }
 tracing = { workspace = true }
 futures-util = { workspace = true, default-features = false, features = ["alloc", "std"] }
 serde = { workspace = true, optional = true, features = ["derive"] }
-subsecond = { workspace = true }
+subsecond = { workspace = true, optional = true }
 anyhow = { workspace = true }
 xxhash-rust = { workspace = true, features = ["const_xxh64"] }
 
@@ -44,6 +44,7 @@ workspace = true
 features = ["Document", "HtmlElement", "Window"]
 
 [features]
+hot-reload = ["dep:subsecond"]
 serialize = ["dep:serde"]
 
 [package.metadata.docs.rs]

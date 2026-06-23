@@ -377,8 +377,14 @@ impl Scope {
             return value;
         }
 
-        // If we're in dev mode, we allow swapping hook values if the hook was initialized at this index
-        if cfg!(debug_assertions) && unsafe { subsecond::get_jump_table().is_some() } {
+        // If hot reload is active in dev mode, allow swapping hook values at this index.
+        #[cfg(feature = "hot-reload")]
+        let can_swap_hot_reloaded_hook =
+            cfg!(debug_assertions) && unsafe { subsecond::get_jump_table().is_some() };
+        #[cfg(not(feature = "hot-reload"))]
+        let can_swap_hot_reloaded_hook = false;
+
+        if can_swap_hot_reloaded_hook {
             hooks[cur_hook] = Box::new(value.clone());
             return value;
         }
