@@ -152,6 +152,19 @@ enum TemplateOp {
 }
 
 #[derive(Clone, Debug)]
+struct StaticAttr {
+    name: &'static str,
+    value: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct SingleElementTemplate {
+    tag: &'static str,
+    static_attrs: Box<[StaticAttr]>,
+    dynamic_child: bool,
+}
+
+#[derive(Clone, Debug)]
 struct PathSlot {
     path: Box<[u8]>,
     slot: usize,
@@ -166,6 +179,7 @@ struct PlaceholderSlot {
 
 #[derive(Clone, Debug)]
 struct TemplateProgram {
+    single_element: Option<SingleElementTemplate>,
     ops: Box<[TemplateOp]>,
     path_slots: Box<[PathSlot]>,
     placeholder_slots: Box<[PlaceholderSlot]>,
@@ -175,6 +189,7 @@ struct TemplateProgram {
 
 impl TemplateProgram {
     fn compile(root: &'static TemplateNode) -> Self {
+        let single_element = Self::compile_single_element(root);
         let mut ops = Vec::new();
         let mut path_slots = Vec::new();
         let mut placeholder_slots = Vec::new();
@@ -188,12 +203,50 @@ impl TemplateProgram {
             &mut placeholder_slots,
         );
         Self {
+            single_element,
             ops: ops.into_boxed_slice(),
             path_slots: path_slots.into_boxed_slice(),
             placeholder_slots: placeholder_slots.into_boxed_slice(),
             slot_count: next_slot,
             root_slot,
         }
+    }
+
+    fn compile_single_element(root: &'static TemplateNode) -> Option<SingleElementTemplate> {
+        let TemplateNode::Element {
+            tag,
+            namespace: None,
+            attrs,
+            children,
+        } = root
+        else {
+            return None;
+        };
+
+        let dynamic_child = match *children {
+            [] => false,
+            [TemplateNode::Dynamic { .. }] => true,
+            _ => return None,
+        };
+
+        let mut static_attrs = Vec::new();
+        for attr in *attrs {
+            match attr {
+                TemplateAttribute::Static {
+                    name,
+                    value,
+                    namespace: None,
+                } => static_attrs.push(StaticAttr { name, value }),
+                TemplateAttribute::Dynamic { .. } => {}
+                TemplateAttribute::Static { .. } => return None,
+            }
+        }
+
+        Some(SingleElementTemplate {
+            tag,
+            static_attrs: static_attrs.into_boxed_slice(),
+            dynamic_child,
+        })
     }
 
     fn compile_node(
@@ -325,35 +378,61 @@ impl SlotStorage {
 }
 
 #[derive(Debug)]
-struct TemplateInstance {
-    program: Rc<TemplateProgram>,
-    slots: SlotStorage,
+enum TemplateInstance {
+    Program {
+        program: Rc<TemplateProgram>,
+        slots: SlotStorage,
+    },
+    SingleDynamicChild {
+        parent: i32,
+        child: i32,
+    },
 }
 
 impl TemplateInstance {
     fn raw_for_path(&self, path: &[u8]) -> Option<i32> {
-        let slot = self.program.slot_for_path(path)?;
-        self.slots.get(slot).filter(|raw| *raw != raw::NULL_NODE)
+        match self {
+            Self::Program { program, slots } => {
+                let slot = program.slot_for_path(path)?;
+                slots.get(slot).filter(|raw| *raw != raw::NULL_NODE)
+            }
+            Self::SingleDynamicChild { child, .. } => {
+                (path == [0] && *child != raw::NULL_NODE).then_some(*child)
+            }
+        }
     }
 
     fn set_raw_for_path(&mut self, path: &[u8], raw_node: i32) {
-        if let Some(slot) = self.program.slot_for_path(path) {
-            self.slots.set(slot, raw_node);
+        match self {
+            Self::Program { program, slots } => {
+                if let Some(slot) = program.slot_for_path(path) {
+                    slots.set(slot, raw_node);
+                }
+            }
+            Self::SingleDynamicChild { child, .. } if path == [0] => {
+                *child = raw_node;
+            }
+            Self::SingleDynamicChild { .. } => {}
         }
     }
 
     fn insertion_point_for_path(&self, path: &[u8]) -> Option<(i32, Option<i32>)> {
-        let slot = self.program.slot_for_path(path)?;
-        let placeholder = self.program.placeholder_for_slot(slot)?;
-        let parent = self
-            .slots
-            .get(placeholder.parent)
-            .filter(|raw| *raw != raw::NULL_NODE)?;
-        let next_sibling = placeholder
-            .next_sibling
-            .and_then(|slot| self.slots.get(slot))
-            .filter(|raw| *raw != raw::NULL_NODE);
-        Some((parent, next_sibling))
+        match self {
+            Self::Program { program, slots } => {
+                let slot = program.slot_for_path(path)?;
+                let placeholder = program.placeholder_for_slot(slot)?;
+                let parent = slots
+                    .get(placeholder.parent)
+                    .filter(|raw| *raw != raw::NULL_NODE)?;
+                let next_sibling = placeholder
+                    .next_sibling
+                    .and_then(|slot| slots.get(slot))
+                    .filter(|raw| *raw != raw::NULL_NODE);
+                Some((parent, next_sibling))
+            }
+            Self::SingleDynamicChild { parent, .. } if path == [0] => Some((*parent, None)),
+            Self::SingleDynamicChild { .. } => None,
+        }
     }
 }
 
@@ -539,6 +618,27 @@ impl<H: Host> LynxMutations<H> {
     }
 
     fn replay_template(&mut self, program: Rc<TemplateProgram>) -> Option<StackNode> {
+        if let Some(single) = &program.single_element {
+            let raw_node = self.host.create_element(single.tag);
+            self.mark_mutated();
+            for attr in single.static_attrs.iter() {
+                self.host.set_attribute(raw_node, attr.name, attr.value);
+                self.mark_mutated();
+            }
+
+            return Some(if single.dynamic_child {
+                StackNode::template(
+                    raw_node,
+                    TemplateInstance::SingleDynamicChild {
+                        parent: raw_node,
+                        child: raw::NULL_NODE,
+                    },
+                )
+            } else {
+                StackNode::single(raw_node)
+            });
+        }
+
         let mut slots = SlotStorage::new(program.slot_count);
         for op in program.ops.iter() {
             match *op {
@@ -573,7 +673,7 @@ impl<H: Host> LynxMutations<H> {
         (raw_node != raw::NULL_NODE).then(|| {
             StackNode::template(
                 raw_node,
-                TemplateInstance {
+                TemplateInstance::Program {
                     program: program.clone(),
                     slots,
                 },
@@ -587,10 +687,12 @@ impl<H: Host> LynxMutations<H> {
         replacements: &[StackNode],
         before: Option<i32>,
     ) {
-        for node in replacements {
-            self.host.insert_before(parent, node.raw, before);
-            self.mark_mutated();
+        if replacements.is_empty() {
+            return;
         }
+        let inserted = replacements.iter().map(|node| node.raw).collect::<Vec<_>>();
+        self.host.replace_elements(parent, &inserted, &[], before);
+        self.mark_mutated();
     }
 
     fn replace_raw_with(&mut self, old_raw: i32, replacements: &[StackNode]) {
@@ -1054,6 +1156,7 @@ mod tests {
         nodes: FxHashMap<i32, RecordedNode>,
         listeners: Vec<(i32, String)>,
         unique_id_calls: Cell<usize>,
+        replace_elements_calls: Cell<usize>,
         commits: usize,
     }
 
@@ -1151,10 +1254,12 @@ mod tests {
             removed: &[i32],
             ref_id: Option<i32>,
         ) {
+            self.replace_elements_calls
+                .set(self.replace_elements_calls.get() + 1);
             for removed in removed {
                 self.remove_child(parent, *removed);
             }
-            for inserted in inserted.iter().rev() {
+            for inserted in inserted {
                 self.insert_before(parent, *inserted, ref_id);
             }
         }
@@ -1380,6 +1485,48 @@ mod tests {
             mutations.host().node(children[1]).text.as_deref(),
             Some("after")
         );
+    }
+
+    #[test]
+    fn skipped_placeholder_multi_replacement_uses_batch_insert() {
+        static CHILDREN: &[TemplateNode] = &[
+            TemplateNode::Dynamic { id: 0 },
+            TemplateNode::Text { text: "after" },
+        ];
+        static ROOTS: &[TemplateNode] = &[TemplateNode::Element {
+            tag: "view",
+            namespace: None,
+            attrs: &[],
+            children: CHILDREN,
+        }];
+        static NODE_PATHS: &[&[u8]] = &[&[0, 0]];
+        let template = Template::new(ROOTS, NODE_PATHS, &[]);
+
+        let mut host = RecordingHost::default();
+        let root = host.page_root();
+        let mut mutations = LynxMutations::new_with_host(host, root);
+
+        mutations.load_template(template, 0, ElementId(1));
+        mutations.create_text_node("first", ElementId(2));
+        mutations.create_text_node("second", ElementId(3));
+        mutations.replace_placeholder_with_nodes(&[0], 2);
+
+        let view = mutations.raw_node(ElementId(1)).unwrap();
+        let children = &mutations.host().node(view).children;
+        assert_eq!(children.len(), 3);
+        assert_eq!(
+            mutations.host().node(children[0]).text.as_deref(),
+            Some("first")
+        );
+        assert_eq!(
+            mutations.host().node(children[1]).text.as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            mutations.host().node(children[2]).text.as_deref(),
+            Some("after")
+        );
+        assert_eq!(mutations.host().replace_elements_calls.get(), 1);
     }
 
     #[test]

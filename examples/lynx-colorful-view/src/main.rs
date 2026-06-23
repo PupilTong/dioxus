@@ -1,4 +1,4 @@
-use dioxus_lynx::prelude::*;
+use dioxus_lynx::{CSS, css, lynx_sys::raw};
 
 const LEVEL1: [&str; 3] = ["77", "00", "ff"];
 const LEVEL2: [&str; 16] = [
@@ -6,6 +6,7 @@ const LEVEL2: [&str; 16] = [
 ];
 const LEVEL3: [&str; 16] = LEVEL2;
 const LEVEL4: [&str; 8] = ["00", "11", "22", "33", "44", "55", "66", "77"];
+include!(concat!(env!("OUT_DIR"), "/color_styles.rs"));
 
 const APP_STYLES: css::CSSTokenStream = CSS!(
     r#"
@@ -49,50 +50,65 @@ const APP_STYLES: css::CSSTokenStream = CSS!(
 "#
 );
 
-fn color_style(red: &str, green: &str, blue: &str) -> String {
-    format!("background-color: #{red}{green}{blue};")
+fn create_view(class_name: &str, style: Option<&'static str>) -> i32 {
+    let node = raw::create_view();
+    raw::set_classes(node, class_name);
+    if let Some(style) = style {
+        raw::set_string_attribute(node, "style", style);
+    }
+    node
 }
 
-#[allow(non_snake_case)]
-fn App() -> Element {
-    rsx! {
-        view { class: "root",
-            {LEVEL1.iter().map(|color1| {
-                rsx! {
-                    view {
-                        class: "outer",
-                        style: color_style(color1, color1, color1),
-                        {LEVEL2.iter().map(move |color2| {
-                            rsx! {
-                                view {
-                                    class: "block1",
-                                    style: color_style(color1, color2, color2),
-                                    {LEVEL3.iter().map(move |color3| {
-                                        rsx! {
-                                            view {
-                                                class: "block2",
-                                                style: color_style(color1, color2, color3),
-                                                {LEVEL4.iter().map(move |color4| {
-                                                    rsx! {
-                                                        view {
-                                                            class: "block3",
-                                                            style: color_style(color2, color3, color4),
-                                                        }
-                                                    }
-                                                })}
-                                            }
-                                        }
-                                    })}
-                                }
-                            }
-                        })}
-                    }
+fn append_children(parent: i32, children: &[i32]) {
+    raw::replace_elements(parent, children, &[], None);
+}
+
+fn colorful_view() -> i32 {
+    let root = create_view("root", None);
+    let mut outer_nodes = Vec::with_capacity(LEVEL1.len());
+
+    for (color1_index, _) in LEVEL1.iter().enumerate() {
+        let outer = create_view("outer", Some(OUTER_STYLES[color1_index]));
+        let mut block1_nodes = Vec::with_capacity(LEVEL2.len());
+
+        for (color2_index, _) in LEVEL2.iter().enumerate() {
+            let block1 = create_view("block1", Some(BLOCK1_STYLES[color1_index][color2_index]));
+            let mut block2_nodes = Vec::with_capacity(LEVEL3.len());
+
+            for (color3_index, _) in LEVEL3.iter().enumerate() {
+                let block2 = create_view(
+                    "block2",
+                    Some(BLOCK2_STYLES[color1_index][color2_index][color3_index]),
+                );
+                let mut block3_nodes = Vec::with_capacity(LEVEL4.len());
+
+                for (color4_index, _) in LEVEL4.iter().enumerate() {
+                    block3_nodes.push(create_view(
+                        "block3",
+                        Some(BLOCK3_STYLES[color2_index][color3_index][color4_index]),
+                    ));
                 }
-            })}
+
+                append_children(block2, &block3_nodes);
+                block2_nodes.push(block2);
+            }
+
+            append_children(block1, &block2_nodes);
+            block1_nodes.push(block1);
         }
+
+        append_children(outer, &block1_nodes);
+        outer_nodes.push(outer);
     }
+
+    append_children(root, &outer_nodes);
+    root
 }
 
 fn main() {
-    launch_static_with_stylesheet(App, APP_STYLES);
+    raw::replace_style_sheets_tokens(APP_STYLES);
+    let page = raw::get_page_element().unwrap_or_else(raw::create_page);
+    let root = colorful_view();
+    raw::append_element(page, root);
+    raw::flush_element_tree(None);
 }
