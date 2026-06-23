@@ -10,7 +10,7 @@ rust-version = "1.85.0"
 name = "dioxus_lynx"
 
 [dependencies]
-dioxus-core = { workspace = true }
+dioxus-core = { workspace = true, features = ["minimal-root"] }
 dioxus-core-macro = { workspace = true }
 dioxus-hooks = { workspace = true }
 dioxus-lynx-macro = { workspace = true }

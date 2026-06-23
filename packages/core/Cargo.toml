@@ -45,6 +45,7 @@ features = ["Document", "HtmlElement", "Window"]
 
 [features]
 hot-reload = ["dep:subsecond"]
+minimal-root = []
 serialize = ["dep:serde"]
 
 [package.metadata.docs.rs]

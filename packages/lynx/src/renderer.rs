@@ -43,7 +43,15 @@ impl Host for RealHost {
     }
 
     fn create_element(&mut self, tag: &str) -> i32 {
-        raw::create_element(tag)
+        match tag {
+            "view" => raw::create_view(),
+            "text" => raw::create_text(),
+            "image" => raw::create_image(),
+            "scroll-view" => raw::create_scroll_view(),
+            "page" => raw::create_page(),
+            "wrapper" => raw::create_wrapper_element(),
+            _ => raw::create_element(tag),
+        }
     }
 
     fn create_text(&mut self, text: &str) -> i32 {
@@ -301,9 +309,9 @@ impl StackNode {
 
 pub struct LynxMutations<H: Host = RealHost> {
     host: H,
-    nodes: FxHashMap<ElementId, i32>,
+    nodes: Vec<i32>,
     unique_to_element: FxHashMap<i64, ElementId>,
-    listener_counts: FxHashMap<ElementId, usize>,
+    listener_counts: Vec<usize>,
     templates: FxHashMap<Template, Box<[Rc<TemplateProgram>]>>,
     stack: Vec<StackNode>,
     mutated: bool,
@@ -325,9 +333,9 @@ impl<H: Host> LynxMutations<H> {
     pub fn new_with_host(host: H, root: i32) -> Self {
         let mut this = Self {
             host,
-            nodes: FxHashMap::default(),
+            nodes: Vec::new(),
             unique_to_element: FxHashMap::default(),
-            listener_counts: FxHashMap::default(),
+            listener_counts: Vec::new(),
             templates: FxHashMap::default(),
             stack: Vec::new(),
             mutated: false,
@@ -345,7 +353,10 @@ impl<H: Host> LynxMutations<H> {
     }
 
     pub fn raw_node(&self, id: ElementId) -> Option<i32> {
-        self.nodes.get(&id).copied()
+        self.nodes
+            .get(id.0)
+            .copied()
+            .filter(|raw| *raw != raw::NULL_NODE)
     }
 
     pub fn element_id_for_unique_id(&self, unique_id: i64) -> Option<ElementId> {
@@ -353,16 +364,37 @@ impl<H: Host> LynxMutations<H> {
     }
 
     fn bind_node(&mut self, id: ElementId, raw_node: i32) {
-        self.nodes.insert(id, raw_node);
-        if self.listener_counts.get(&id).copied().unwrap_or(0) > 0 {
+        self.ensure_node_slot(id);
+        self.nodes[id.0] = raw_node;
+        if self.listener_count(id) > 0 {
             self.bind_event_target(id, raw_node);
         }
     }
 
     fn unbind_node(&mut self, id: ElementId) {
-        self.nodes.remove(&id);
-        self.listener_counts.remove(&id);
+        if let Some(raw) = self.nodes.get_mut(id.0) {
+            *raw = raw::NULL_NODE;
+        }
+        if let Some(count) = self.listener_counts.get_mut(id.0) {
+            *count = 0;
+        }
         self.unique_to_element.retain(|_, element| *element != id);
+    }
+
+    fn ensure_node_slot(&mut self, id: ElementId) {
+        if self.nodes.len() <= id.0 {
+            self.nodes.resize(id.0 + 1, raw::NULL_NODE);
+        }
+    }
+
+    fn ensure_listener_slot(&mut self, id: ElementId) {
+        if self.listener_counts.len() <= id.0 {
+            self.listener_counts.resize(id.0 + 1, 0);
+        }
+    }
+
+    fn listener_count(&self, id: ElementId) -> usize {
+        self.listener_counts.get(id.0).copied().unwrap_or(0)
     }
 
     fn bind_event_target(&mut self, id: ElementId, raw_node: i32) {
@@ -649,11 +681,12 @@ impl<H: Host> WriteMutations for LynxMutations<H> {
         let Some(raw_node) = self.raw_node(id) else {
             return;
         };
-        let old_count = self.listener_counts.get(&id).copied().unwrap_or(0);
+        self.ensure_listener_slot(id);
+        let old_count = self.listener_counts[id.0];
         if old_count == 0 {
             self.bind_event_target(id, raw_node);
         }
-        self.listener_counts.insert(id, old_count + 1);
+        self.listener_counts[id.0] = old_count + 1;
         self.host
             .add_event_listener(raw_node, name, event_dispatcher_id());
         self.mark_mutated();
@@ -666,10 +699,9 @@ impl<H: Host> WriteMutations for LynxMutations<H> {
         self.host
             .remove_event_listener(raw_node, name, event_dispatcher_id());
         self.mark_mutated();
-        if let Some(count) = self.listener_counts.get_mut(&id) {
+        if let Some(count) = self.listener_counts.get_mut(id.0) {
             *count = count.saturating_sub(1);
             if *count == 0 {
-                self.listener_counts.remove(&id);
                 self.unbind_event_target(id);
             }
         }
