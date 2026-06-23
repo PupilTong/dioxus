@@ -6,7 +6,7 @@ use dioxus_lynx::prelude::*;
 
 const ARROW: &str = inline_image!("assets/arrow.png");
 const LYNX_LOGO: &str = inline_image!("assets/lynx-logo.png");
-const YEW_LOGO: &str = inline_image!("assets/yew-logo.png");
+const DIOXUS_LOGO: &str = inline_image!("assets/dioxus-logo.png");
 
 const APP_STYLES: css::CSSTokenStream = CSS!(
     r#"
@@ -60,7 +60,7 @@ text {
   margin-bottom: 8px;
 }
 
-.Logo--yew {
+.Logo--dioxus {
   width: 100px;
   height: 100px;
   animation: Logo--spin infinite 20s linear;
@@ -142,28 +142,28 @@ const FLAP_FRAME_MS: i64 = 16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Logo {
     Lynx,
-    Yew,
+    Dioxus,
 }
 
 impl Logo {
     const fn source(self) -> &'static str {
         match self {
             Self::Lynx => LYNX_LOGO,
-            Self::Yew => YEW_LOGO,
+            Self::Dioxus => DIOXUS_LOGO,
         }
     }
 
     const fn class_name(self) -> &'static str {
         match self {
             Self::Lynx => "Logo--lynx",
-            Self::Yew => "Logo--yew",
+            Self::Dioxus => "Logo--dioxus",
         }
     }
 
     const fn toggled(self) -> Self {
         match self {
-            Self::Lynx => Self::Yew,
-            Self::Yew => Self::Lynx,
+            Self::Lynx => Self::Dioxus,
+            Self::Dioxus => Self::Lynx,
         }
     }
 }

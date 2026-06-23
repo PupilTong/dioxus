@@ -166,5 +166,5 @@ pub(crate) fn event_for_runtime(
     current_target_unique_id: Option<i64>,
 ) -> Event<dyn std::any::Any> {
     let data = LynxEventData::new(event_type, current_target_unique_id);
-    Event::new(Rc::new(data) as Rc<dyn std::any::Any>, false)
+    Event::new(Rc::new(data) as Rc<dyn std::any::Any>, true)
 }

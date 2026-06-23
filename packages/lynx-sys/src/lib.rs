@@ -68,9 +68,12 @@ struct TimerEntry {
     callback: Box<dyn FnMut()>,
 }
 
+pub type TimerDispatchHook = Box<dyn FnMut(&mut dyn FnMut())>;
+
 thread_local! {
     static TIMER_CALLBACKS: RefCell<HashMap<TimerId, TimerEntry>> = RefCell::new(HashMap::new());
     static CANCELLED_TIMERS: RefCell<HashSet<TimerId>> = RefCell::new(HashSet::new());
+    static TIMER_DISPATCH_HOOK: RefCell<Option<TimerDispatchHook>> = RefCell::new(None);
 }
 
 fn timer_callback_index() -> i32 {
@@ -108,7 +111,7 @@ fn dispatch_timer(timer_id: TimerId) {
         return;
     };
 
-    (entry.callback)();
+    dispatch_timer_callback(&mut entry.callback);
 
     if entry.repeating {
         let cancelled = CANCELLED_TIMERS.with(|timers| timers.borrow_mut().remove(&timer_id));
@@ -121,6 +124,22 @@ fn dispatch_timer(timer_id: TimerId) {
         CANCELLED_TIMERS.with(|timers| {
             timers.borrow_mut().remove(&timer_id);
         });
+    }
+}
+
+fn dispatch_timer_callback(callback: &mut dyn FnMut()) {
+    let mut fallback = Some(callback);
+    TIMER_DISPATCH_HOOK.with(|hook| {
+        if let Ok(mut hook) = hook.try_borrow_mut()
+            && let Some(hook) = hook.as_mut()
+            && let Some(callback) = fallback.take()
+        {
+            hook(callback);
+        }
+    });
+
+    if let Some(callback) = fallback {
+        callback();
     }
 }
 
@@ -776,6 +795,16 @@ where
 pub fn clear_interval(timer_id: TimerId) {
     raw::clear_interval(timer_id);
     remove_timer_callback(timer_id);
+}
+
+/// Installs a hook around timer callback dispatch.
+///
+/// Renderers can use this to enter their runtime before a host timer callback
+/// runs, then flush any pending UI work after the callback returns.
+pub fn set_timer_dispatch_hook(hook: Option<TimerDispatchHook>) {
+    TIMER_DISPATCH_HOOK.with(|slot| {
+        *slot.borrow_mut() = hook;
+    });
 }
 
 /// Convenience conversion from a host arena id.
