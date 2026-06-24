@@ -103,6 +103,8 @@ impl Host for RealHost {
     fn set_attribute(&mut self, node: i32, name: &str, value: &str) {
         if name == "class" {
             raw::set_classes(node, value);
+        } else if name == "style" {
+            raw::set_inline_style_text(node, value);
         } else {
             raw::set_string_attribute(node, name, value);
         }

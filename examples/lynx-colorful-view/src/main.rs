@@ -62,7 +62,7 @@ fn create_view(class_name: &str) -> i32 {
 fn create_color_view(class_name: &str, red: u32, green: u32, blue: u32) -> i32 {
     let node = create_view(class_name);
     let style = format!("background-color:#{red:02x}{green:02x}{blue:02x};");
-    raw::set_string_attribute(node, "style", &style);
+    raw::set_inline_style_text(node, &style);
     node
 }
 
