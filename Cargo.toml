@@ -14,6 +14,9 @@ members = [
     "packages/router",
     "packages/html",
     "packages/html-internal-macro",
+    "packages/lynx",
+    "packages/lynx-macro",
+    "packages/lynx-sys",
     "packages/hooks",
     "packages/web",
     "packages/ssr",
@@ -90,6 +93,8 @@ members = [
     "packages/subsecond/subsecond-tests/cross-tls-test",
 
     # Full project examples
+    "examples/lynx-colorful-view",
+    "examples/lynx-react",
     "examples/01-app-demos/hackernews",
     "examples/01-app-demos/ecommerce-site",
     "examples/01-app-demos/bluetooth-scanner",
@@ -129,6 +134,9 @@ dioxus-document = { path = "packages/document", version = "0.8.0-alpha.0", defau
 dioxus-history = { path = "packages/history", version = "0.8.0-alpha.0", default-features = false }
 dioxus-html = { path = "packages/html", version = "0.8.0-alpha.0", default-features = false }
 dioxus-html-internal-macro = { path = "packages/html-internal-macro", version = "0.8.0-alpha.0" }
+dioxus-lynx = { path = "packages/lynx", version = "0.8.0-alpha.0" }
+dioxus-lynx-macro = { path = "packages/lynx-macro", version = "0.8.0-alpha.0" }
+dioxus-lynx-sys = { path = "packages/lynx-sys", version = "0.8.0-alpha.0" }
 dioxus-hooks = { path = "packages/hooks", version = "0.8.0-alpha.0" }
 dioxus-web = { path = "packages/web", version = "0.8.0-alpha.0", default-features = false }
 dioxus-ssr = { path = "packages/ssr", version = "0.8.0-alpha.0", default-features = false }
@@ -232,6 +240,7 @@ html_parser = "0.7.0"
 thiserror = "2.0.18"
 prettyplease = { version = "0.2.35", features = ["verbatim"] }
 const_format = "0.2.34"
+cssparser = "0.37.0"
 cargo_toml = { version = "0.22.3" }
 icns = "0.4.0"
 image = "0.25.6"

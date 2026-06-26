@@ -1,0 +1,23 @@
+[package]
+name = "dioxus-lynx"
+version = { workspace = true }
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Lynx renderer and target facade for Dioxus"
+rust-version = "1.85.0"
+
+[lib]
+name = "dioxus_lynx"
+
+[dependencies]
+dioxus-core = { workspace = true, features = ["minimal-root"] }
+dioxus-core-macro = { workspace = true }
+dioxus-lynx-macro = { workspace = true }
+dioxus-lynx-sys = { workspace = true }
+dioxus-hooks = { workspace = true, optional = true }
+dioxus-signals = { workspace = true, optional = true }
+rustc-hash = { workspace = true }
+
+[features]
+default = ["hooks"]
+hooks = ["dep:dioxus-hooks", "dep:dioxus-signals"]

@@ -1,0 +1,9 @@
+[package]
+name = "lynx-colorful-view"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dioxus-lynx-macro = { path = "../../packages/lynx-macro" }
+dioxus-lynx-sys = { path = "../../packages/lynx-sys" }

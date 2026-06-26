@@ -134,6 +134,8 @@ pub use dioxus_config_macros as config_macros;
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm-split")))]
 pub use wasm_splitter as wasm_split;
 
+#[cfg(feature = "hot-reload")]
+#[cfg_attr(docsrs, doc(cfg(feature = "hot-reload")))]
 pub use subsecond;
 
 #[cfg(feature = "asset")]
